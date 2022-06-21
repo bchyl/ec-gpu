@@ -13,7 +13,7 @@ use rust_gpu_tools::Device;
 
 /// The power that will be used to define the maximum number of elements. The number of elements
 /// is `2^MAX_ELEMENTS_POWER`.
-const MAX_ELEMENTS_POWER: usize = 28;
+const MAX_ELEMENTS_POWER: usize = 29;
 /// The maximum number of elements for this benchmark.
 const MAX_ELEMENTS: usize = 1 << MAX_ELEMENTS_POWER;
 
