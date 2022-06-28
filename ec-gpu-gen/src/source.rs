@@ -326,19 +326,19 @@ mod tests {
     use rust_gpu_tools::opencl;
     use rust_gpu_tools::{program_closures, Device, GPUError, Program};
 
-    use blstrs::Scalar;
     use ff::{Field, PrimeField};
     use lazy_static::lazy_static;
+    use pairing::bn256::Fr;
     use rand::{thread_rng, Rng};
 
     static TEST_SRC: &str = include_str!("./cl/test.cl");
 
     #[derive(PartialEq, Debug, Clone, Copy)]
     #[repr(transparent)]
-    pub struct GpuScalar(pub Scalar);
+    pub struct GpuScalar(pub Fr);
     impl Default for GpuScalar {
         fn default() -> Self {
-            Self(Scalar::zero())
+            Self(Fr::zero())
         }
     }
 
@@ -370,7 +370,7 @@ mod tests {
     fn source_cuda() -> String {
         let src = vec![
             common(),
-            field::<Scalar, Limb32>("Scalar32"),
+            field::<Fr, Limb32>("Scalar32"),
             TEST_SRC.to_string(),
         ]
         .join("\n\n");

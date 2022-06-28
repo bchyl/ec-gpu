@@ -5,7 +5,7 @@ use std::sync::{Arc, RwLock};
 use ec_gpu::GpuEngine;
 use ff::Field;
 use log::{error, info};
-use pairing::Engine;
+use pairing::group::Group;
 use rust_gpu_tools::{program_closures, Device, LocalBuffer, Program, Vendor};
 
 use crate::threadpool::THREAD_POOL;
@@ -19,19 +19,19 @@ const MAX_LOG2_RADIX: u32 = 8; // Radix256
 const MAX_LOG2_LOCAL_WORK_SIZE: u32 = 7; // 128
 
 /// FFT kernel for a single GPU.
-pub struct SingleFftKernel<'a, E>
+pub struct SingleFftKernel<'a, G>
 where
-    E: Engine + GpuEngine,
+    G: Group + GpuEngine,
 {
     program: Program,
     /// An optional function which will be called at places where it is possible to abort the FFT
     /// calculations. If it returns true, the calculation will be aborted with an
     /// [`EcError::Aborted`].
     maybe_abort: Option<&'a (dyn Fn() -> bool + Send + Sync)>,
-    _phantom: std::marker::PhantomData<E::Fr>,
+    _phantom: std::marker::PhantomData<G::Scalar>,
 }
 
-impl<'a, E: Engine + GpuEngine> SingleFftKernel<'a, E> {
+impl<'a, G: Group + GpuEngine> SingleFftKernel<'a, G> {
     /// Create a new kernel for a device.
     ///
     /// The `maybe_abort` function is called when it is possible to abort the computation, without
@@ -41,10 +41,10 @@ impl<'a, E: Engine + GpuEngine> SingleFftKernel<'a, E> {
         maybe_abort: Option<&'a (dyn Fn() -> bool + Send + Sync)>,
     ) -> EcResult<Self> {
         let source = match device.vendor() {
-            Vendor::Nvidia => crate::gen_source::<E, Limb32>(),
-            _ => crate::gen_source::<E, Limb64>(),
+            Vendor::Nvidia => crate::gen_source::<G, Limb32>(),
+            _ => crate::gen_source::<G, Limb64>(),
         };
-        let program = program::program::<E>(device, &source)?;
+        let program = program::program::<G>(device, &source)?;
 
         Ok(SingleFftKernel {
             program,
@@ -56,21 +56,26 @@ impl<'a, E: Engine + GpuEngine> SingleFftKernel<'a, E> {
     /// Performs FFT on `input`
     /// * `omega` - Special value `omega` is used for FFT over finite-fields
     /// * `log_n` - Specifies log2 of number of elements
-    pub fn radix_fft(&mut self, input: &mut [E::Fr], omega: &E::Fr, log_n: u32) -> EcResult<()> {
-        let closures = program_closures!(|program, input: &mut [E::Fr]| -> EcResult<()> {
+    pub fn radix_fft(
+        &mut self,
+        input: &mut [G::Scalar],
+        omega: &G::Scalar,
+        log_n: u32,
+    ) -> EcResult<()> {
+        let closures = program_closures!(|program, input: &mut [G::Scalar]| -> EcResult<()> {
             let n = 1 << log_n;
             // All usages are safe as the buffers are initialized from either the host or the GPU
             // before they are read.
-            let mut src_buffer = unsafe { program.create_buffer::<E::Fr>(n)? };
-            let mut dst_buffer = unsafe { program.create_buffer::<E::Fr>(n)? };
+            let mut src_buffer = unsafe { program.create_buffer::<G::Scalar>(n)? };
+            let mut dst_buffer = unsafe { program.create_buffer::<G::Scalar>(n)? };
             // The precalculated values pq` and `omegas` are valid for radix degrees up to `max_deg`
             let max_deg = cmp::min(MAX_LOG2_RADIX, log_n);
 
             // Precalculate:
             // [omega^(0/(2^(deg-1))), omega^(1/(2^(deg-1))), ..., omega^((2^(deg-1)-1)/(2^(deg-1)))]
-            let mut pq = vec![E::Fr::zero(); 1 << max_deg >> 1];
+            let mut pq = vec![G::Scalar::zero(); 1 << max_deg >> 1];
             let twiddle = omega.pow_vartime([(n >> max_deg) as u64]);
-            pq[0] = E::Fr::one();
+            pq[0] = G::Scalar::one();
             if max_deg > 1 {
                 pq[1] = twiddle;
                 for i in 2..(1 << max_deg >> 1) {
@@ -81,7 +86,7 @@ impl<'a, E: Engine + GpuEngine> SingleFftKernel<'a, E> {
             let pq_buffer = program.create_buffer_from_slice(&pq)?;
 
             // Precalculate [omega, omega^2, omega^4, omega^8, ..., omega^(2^31)]
-            let mut omegas = vec![E::Fr::zero(); 32];
+            let mut omegas = vec![G::Scalar::zero(); 32];
             omegas[0] = *omega;
             for i in 1..LOG2_MAX_ELEMENTS {
                 omegas[i] = omegas[i - 1].pow_vartime([2u64]);
@@ -115,7 +120,7 @@ impl<'a, E: Engine + GpuEngine> SingleFftKernel<'a, E> {
                     .arg(&dst_buffer)
                     .arg(&pq_buffer)
                     .arg(&omegas_buffer)
-                    .arg(&LocalBuffer::<E::Fr>::new(1 << deg))
+                    .arg(&LocalBuffer::<G::Scalar>::new(1 << deg))
                     .arg(&n)
                     .arg(&log_p)
                     .arg(&deg)
@@ -136,16 +141,16 @@ impl<'a, E: Engine + GpuEngine> SingleFftKernel<'a, E> {
 }
 
 /// One FFT kernel for each GPU available.
-pub struct FftKernel<'a, E>
+pub struct FftKernel<'a, G>
 where
-    E: Engine + GpuEngine,
+    G: Group + GpuEngine,
 {
-    kernels: Vec<SingleFftKernel<'a, E>>,
+    kernels: Vec<SingleFftKernel<'a, G>>,
 }
 
-impl<'a, E> FftKernel<'a, E>
+impl<'a, G> FftKernel<'a, G>
 where
-    E: Engine + GpuEngine,
+    G: Group + GpuEngine,
 {
     /// Create new kernels, one for each given device.
     pub fn create(devices: &[&Device]) -> EcResult<Self> {
@@ -170,7 +175,7 @@ where
         let kernels: Vec<_> = devices
             .iter()
             .filter_map(|device| {
-                let kernel = SingleFftKernel::<E>::create(device, maybe_abort);
+                let kernel = SingleFftKernel::<G>::create(device, maybe_abort);
                 if let Err(ref e) = kernel {
                     error!(
                         "Cannot initialize kernel for device '{}'! Error: {}",
@@ -198,7 +203,12 @@ where
     /// * `log_n` - Specifies log2 of number of elements
     ///
     /// Uses the first available GPU.
-    pub fn radix_fft(&mut self, input: &mut [E::Fr], omega: &E::Fr, log_n: u32) -> EcResult<()> {
+    pub fn radix_fft(
+        &mut self,
+        input: &mut [G::Scalar],
+        omega: &G::Scalar,
+        log_n: u32,
+    ) -> EcResult<()> {
         self.kernels[0].radix_fft(input, omega, log_n)
     }
 
@@ -209,8 +219,8 @@ where
     /// Uses all available GPUs to distribute the work.
     pub fn radix_fft_many(
         &mut self,
-        inputs: &mut [&mut [E::Fr]],
-        omegas: &[E::Fr],
+        inputs: &mut [&mut [G::Scalar]],
+        omegas: &[G::Scalar],
         log_ns: &[u32],
     ) -> EcResult<()> {
         let n = inputs.len();
@@ -252,18 +262,18 @@ where
 mod tests {
     use super::*;
 
-    use blstrs::{Bls12, Scalar as Fr};
     use ff::{Field, PrimeField};
+    use pairing::bn256::{Bn256, Fr};
     use std::time::Instant;
 
     use crate::fft_cpu::{parallel_fft, serial_fft};
     use crate::threadpool::Worker;
 
-    fn omega<E: Engine>(num_coeffs: usize) -> E::Fr {
+    fn omega<G: Group>(num_coeffs: usize) -> G::Scalar {
         // Compute omega, the 2^exp primitive root of unity
         let exp = (num_coeffs as f32).log2().floor() as u32;
-        let mut omega = E::Fr::root_of_unity();
-        for _ in exp..E::Fr::S {
+        let mut omega = G::Scalar::root_of_unity();
+        for _ in exp..G::Scalar::S {
             omega = omega.square();
         }
         omega
@@ -276,13 +286,13 @@ mod tests {
         let worker = Worker::new();
         let log_threads = worker.log_num_threads();
         let devices = Device::all();
-        let mut kern = FftKernel::<Bls12>::create(&devices).expect("Cannot initialize kernel!");
+        let mut kern = FftKernel::<Bn256>::create(&devices).expect("Cannot initialize kernel!");
 
         for log_d in 1..=20 {
             let d = 1 << log_d;
 
             let mut v1_coeffs = (0..d).map(|_| Fr::random(&mut rng)).collect::<Vec<_>>();
-            let v1_omega = omega::<Bls12>(v1_coeffs.len());
+            let v1_omega = omega::<Bn256>(v1_coeffs.len());
             let mut v2_coeffs = v1_coeffs.clone();
             let v2_omega = v1_omega;
 
@@ -296,9 +306,9 @@ mod tests {
 
             now = Instant::now();
             if log_d <= log_threads {
-                serial_fft::<Bls12>(&mut v2_coeffs, &v2_omega, log_d);
+                serial_fft::<Bn256>(&mut v2_coeffs, &v2_omega, log_d);
             } else {
-                parallel_fft::<Bls12>(&mut v2_coeffs, &worker, &v2_omega, log_d, log_threads);
+                parallel_fft::<Bn256>(&mut v2_coeffs, &worker, &v2_omega, log_d, log_threads);
             }
             let cpu_dur = now.elapsed().as_secs() * 1000 + now.elapsed().subsec_millis() as u64;
             println!("CPU ({} cores) took {}ms.", 1 << log_threads, cpu_dur);
@@ -317,7 +327,7 @@ mod tests {
         let worker = Worker::new();
         let log_threads = worker.log_num_threads();
         let devices = Device::all();
-        let mut kern = FftKernel::<Bls12>::create(&devices).expect("Cannot initialize kernel!");
+        let mut kern = FftKernel::<Bn256>::create(&devices).expect("Cannot initialize kernel!");
 
         for log_d in 1..=20 {
             let d = 1 << log_d;
@@ -325,9 +335,9 @@ mod tests {
             let mut v11_coeffs = (0..d).map(|_| Fr::random(&mut rng)).collect::<Vec<_>>();
             let mut v12_coeffs = (0..d).map(|_| Fr::random(&mut rng)).collect::<Vec<_>>();
             let mut v13_coeffs = (0..d).map(|_| Fr::random(&mut rng)).collect::<Vec<_>>();
-            let v11_omega = omega::<Bls12>(v11_coeffs.len());
-            let v12_omega = omega::<Bls12>(v12_coeffs.len());
-            let v13_omega = omega::<Bls12>(v13_coeffs.len());
+            let v11_omega = omega::<Bn256>(v11_coeffs.len());
+            let v12_omega = omega::<Bn256>(v12_coeffs.len());
+            let v13_omega = omega::<Bn256>(v13_coeffs.len());
 
             let mut v21_coeffs = v11_coeffs.clone();
             let mut v22_coeffs = v12_coeffs.clone();
@@ -350,13 +360,13 @@ mod tests {
 
             now = Instant::now();
             if log_d <= log_threads {
-                serial_fft::<Bls12>(&mut v21_coeffs, &v21_omega, log_d);
-                serial_fft::<Bls12>(&mut v22_coeffs, &v22_omega, log_d);
-                serial_fft::<Bls12>(&mut v23_coeffs, &v23_omega, log_d);
+                serial_fft::<Bn256>(&mut v21_coeffs, &v21_omega, log_d);
+                serial_fft::<Bn256>(&mut v22_coeffs, &v22_omega, log_d);
+                serial_fft::<Bn256>(&mut v23_coeffs, &v23_omega, log_d);
             } else {
-                parallel_fft::<Bls12>(&mut v21_coeffs, &worker, &v21_omega, log_d, log_threads);
-                parallel_fft::<Bls12>(&mut v22_coeffs, &worker, &v22_omega, log_d, log_threads);
-                parallel_fft::<Bls12>(&mut v23_coeffs, &worker, &v23_omega, log_d, log_threads);
+                parallel_fft::<Bn256>(&mut v21_coeffs, &worker, &v21_omega, log_d, log_threads);
+                parallel_fft::<Bn256>(&mut v22_coeffs, &worker, &v22_omega, log_d, log_threads);
+                parallel_fft::<Bn256>(&mut v23_coeffs, &worker, &v23_omega, log_d, log_threads);
             }
             let cpu_dur = now.elapsed().as_secs() * 1000 + now.elapsed().subsec_millis() as u64;
             println!("CPU ({} cores) took {}ms.", 1 << log_threads, cpu_dur);

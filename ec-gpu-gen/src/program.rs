@@ -2,7 +2,7 @@ use std::env;
 
 use ec_gpu::GpuEngine;
 use log::info;
-use pairing::Engine;
+use pairing::group::Group;
 #[cfg(feature = "cuda")]
 use rust_gpu_tools::cuda;
 #[cfg(feature = "opencl")]
@@ -51,7 +51,7 @@ fn select_framework(default_framework: Framework) -> EcResult<Framework> {
 /// the environment variable `EC_GPU_FRAMEWORK`, which can be set either to `cuda` or `opencl`.
 pub fn program<E>(device: &Device, source: &str) -> EcResult<Program>
 where
-    E: Engine + GpuEngine,
+    E: Group + GpuEngine,
 {
     let framework = select_framework(device.framework())?;
     program_use_framework::<E>(device, source, &framework)
@@ -64,7 +64,7 @@ pub fn program_use_framework<E>(
     framework: &Framework,
 ) -> EcResult<Program>
 where
-    E: Engine + GpuEngine,
+    E: Group + GpuEngine,
 {
     match framework {
         #[cfg(feature = "cuda")]
