@@ -8,7 +8,8 @@ use std::sync::Arc;
 use bitvec::prelude::{BitVec, Lsb0};
 use ff::{Field, PrimeField};
 use group::{prime::PrimeCurveAffine, Group};
-use pairing::Engine;
+//use group::{prime::PrimeCurveAffine, Group};
+use pairing::arithmetic::Engine;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 
 use crate::error::EcError;
@@ -90,8 +91,10 @@ pub trait QueryDensity: Sized {
     fn get_query_size(self) -> Option<usize>;
     fn generate_exps<E: Engine>(
         self,
-        exponents: Arc<Vec<<<E as Engine>::Fr as PrimeField>::Repr>>,
-    ) -> Arc<Vec<<<E as Engine>::Fr as PrimeField>::Repr>>;
+        exponents: Arc<Vec<<<E as Engine>::Scalar as PrimeField>::Repr>>,
+    ) -> Arc<Vec<<<E as Engine>::Scalar as PrimeField>::Repr>>
+    where
+        <E as pairing::arithmetic::Engine>::Scalar: ff::PrimeField;
 }
 
 #[derive(Clone)]
@@ -116,8 +119,11 @@ impl<'a> QueryDensity for &'a FullDensity {
 
     fn generate_exps<E: Engine>(
         self,
-        exponents: Arc<Vec<<<E as Engine>::Fr as PrimeField>::Repr>>,
-    ) -> Arc<Vec<<<E as Engine>::Fr as PrimeField>::Repr>> {
+        exponents: Arc<Vec<<<E as Engine>::Scalar as PrimeField>::Repr>>,
+    ) -> Arc<Vec<<<E as Engine>::Scalar as PrimeField>::Repr>>
+    where
+        <E as pairing::arithmetic::Engine>::Scalar: ff::PrimeField,
+    {
         exponents
     }
 }
@@ -141,8 +147,11 @@ impl<'a> QueryDensity for &'a DensityTracker {
 
     fn generate_exps<E: Engine>(
         self,
-        exponents: Arc<Vec<<<E as Engine>::Fr as PrimeField>::Repr>>,
-    ) -> Arc<Vec<<<E as Engine>::Fr as PrimeField>::Repr>> {
+        exponents: Arc<Vec<<<E as Engine>::Scalar as PrimeField>::Repr>>,
+    ) -> Arc<Vec<<<E as Engine>::Scalar as PrimeField>::Repr>>
+    where
+        <E as pairing::arithmetic::Engine>::Scalar: ff::PrimeField,
+    {
         let exps: Vec<_> = exponents
             .iter()
             .zip(self.bv.iter())
@@ -350,7 +359,7 @@ where
     for<'a> &'a Q: QueryDensity,
     D: Send + Sync + 'static + Clone + AsRef<Q>,
     G: PrimeCurveAffine,
-    E: Engine<Fr = G::Scalar>,
+    E: Engine<Scalar = G::Scalar>,
     S: SourceBuilder<G>,
 {
     let c = if exponents.len() < 32 {
@@ -372,14 +381,19 @@ where
 mod tests {
     use super::*;
 
-    use blstrs::Bls12;
-    use group::Curve;
+    use pairing::bn256;
+    use pairing::bn256::Bn256;
+    use pairing::group::ff::{Field, PrimeField};
+    use pairing::group::Group;
+
+    use pairing::group::prime::PrimeCurveAffine;
+    use pairing::group::Curve;
     use rand::Rng;
     use rand_core::SeedableRng;
     use rand_xorshift::XorShiftRng;
 
     #[test]
-    fn test_with_bls12() {
+    fn test_with_bn256() {
         fn naive_multiexp<G: PrimeCurveAffine>(
             bases: Arc<Vec<G>>,
             exponents: &[G::Scalar],
@@ -398,12 +412,11 @@ mod tests {
         const SAMPLES: usize = 1 << 14;
 
         let rng = &mut rand::thread_rng();
-        let v: Vec<<Bls12 as Engine>::Fr> = (0..SAMPLES)
-            .map(|_| <Bls12 as Engine>::Fr::random(&mut *rng))
-            .collect();
+        let v: Vec<<Bn256 as Engine>::Scalar> =
+            (0..SAMPLES).map(|_| bn256::Fr::random(&mut *rng)).collect();
         let g = Arc::new(
             (0..SAMPLES)
-                .map(|_| <Bls12 as Engine>::G1::random(&mut *rng).to_affine())
+                .map(|_| bn256::G1::random(&mut *rng).to_affine())
                 .collect::<Vec<_>>(),
         );
 
@@ -415,7 +428,7 @@ mod tests {
         let pool = Worker::new();
 
         let v = Arc::new(v.into_iter().map(|fr| fr.to_repr()).collect());
-        let fast = multiexp_cpu::<_, _, _, Bls12, _>(&pool, (g, 0), FullDensity, v)
+        let fast = multiexp_cpu::<_, _, _, Bn256, _>(&pool, (g, 0), FullDensity, v)
             .wait()
             .unwrap();
 

@@ -6,7 +6,7 @@ use ec_gpu::GpuEngine;
 use ff::PrimeField;
 use group::{prime::PrimeCurveAffine, Group};
 use log::{error, info, warn};
-use pairing::Engine;
+use pairing::arithmetic::Engine;
 use rust_gpu_tools::{program_closures, Device, Program, Vendor, CUDA_CORES};
 use yastl::Scope;
 
@@ -47,7 +47,7 @@ where
     /// [`EcError::Aborted`].
     maybe_abort: Option<&'a (dyn Fn() -> bool + Send + Sync)>,
 
-    _phantom: std::marker::PhantomData<E::Fr>,
+    _phantom: std::marker::PhantomData<E::Scalar>,
 }
 
 fn calc_num_groups(core_count: usize, num_windows: usize) -> usize {
