@@ -326,19 +326,19 @@ mod tests {
     use rust_gpu_tools::opencl;
     use rust_gpu_tools::{program_closures, Device, GPUError, Program};
 
-    use blstrs::Scalar;
     use ff::{Field, PrimeField};
     use lazy_static::lazy_static;
+    use pairing::bn256::Fr;
     use rand::{thread_rng, Rng};
 
     static TEST_SRC: &str = include_str!("./cl/test.cl");
 
     #[derive(PartialEq, Debug, Clone, Copy)]
     #[repr(transparent)]
-    pub struct GpuScalar(pub Scalar);
+    pub struct GpuScalar(pub Fr);
     impl Default for GpuScalar {
         fn default() -> Self {
-            Self(Scalar::zero())
+            Self(Fr::zero())
         }
     }
 
@@ -370,7 +370,7 @@ mod tests {
     fn source_cuda() -> String {
         let src = vec![
             common(),
-            field::<Scalar, Limb32>("Scalar32"),
+            field::<Fr, Limb32>("Scalar32"),
             TEST_SRC.to_string(),
         ]
         .join("\n\n");
@@ -382,8 +382,8 @@ mod tests {
     fn source_opencl() -> String {
         let src = vec![
             common(),
-            field::<Scalar, Limb32>("Scalar32"),
-            field::<Scalar, Limb64>("Scalar64"),
+            field::<Fr, Limb32>("Scalar32"),
+            field::<Fr, Limb64>("Scalar64"),
             TEST_SRC.to_string(),
         ]
         .join("\n\n");
@@ -444,8 +444,8 @@ mod tests {
         };
     }
 
-    fn call_kernel(name: &str, scalars: &[GpuScalar], uints: &[u32]) -> Scalar {
-        let closures = program_closures!(|program, _args| -> Result<Scalar, NoError> {
+    fn call_kernel(name: &str, scalars: &[GpuScalar], uints: &[u32]) -> Fr {
+        let closures = program_closures!(|program, _args| -> Result<Fr, NoError> {
             let mut cpu_buffer = vec![GpuScalar::default()];
             let buffer = program.create_buffer_from_slice(&cpu_buffer).unwrap();
 
@@ -482,8 +482,8 @@ mod tests {
     fn test_add() {
         let mut rng = thread_rng();
         for _ in 0..10 {
-            let a = Scalar::random(&mut rng);
-            let b = Scalar::random(&mut rng);
+            let a = Fr::random(&mut rng);
+            let b = Fr::random(&mut rng);
             let c = a + b;
 
             assert_eq!(
@@ -502,8 +502,8 @@ mod tests {
     fn test_sub() {
         let mut rng = thread_rng();
         for _ in 0..10 {
-            let a = Scalar::random(&mut rng);
-            let b = Scalar::random(&mut rng);
+            let a = Fr::random(&mut rng);
+            let b = Fr::random(&mut rng);
             let c = a - b;
             assert_eq!(
                 call_kernel("test_sub_32", &[GpuScalar(a), GpuScalar(b)], &[]),
@@ -521,8 +521,8 @@ mod tests {
     fn test_mul() {
         let mut rng = thread_rng();
         for _ in 0..10 {
-            let a = Scalar::random(&mut rng);
-            let b = Scalar::random(&mut rng);
+            let a = Fr::random(&mut rng);
+            let b = Fr::random(&mut rng);
             let c = a * b;
 
             assert_eq!(
@@ -541,7 +541,7 @@ mod tests {
     fn test_pow() {
         let mut rng = thread_rng();
         for _ in 0..10 {
-            let a = Scalar::random(&mut rng);
+            let a = Fr::random(&mut rng);
             let b = rng.gen::<u32>();
             let c = a.pow_vartime([b as u64]);
             assert_eq!(call_kernel("test_pow_32", &[GpuScalar(a)], &[b]), c);
@@ -554,7 +554,7 @@ mod tests {
     fn test_sqr() {
         let mut rng = thread_rng();
         for _ in 0..10 {
-            let a = Scalar::random(&mut rng);
+            let a = Fr::random(&mut rng);
             let b = a.square();
 
             assert_eq!(call_kernel("test_sqr_32", &[GpuScalar(a)], &[]), b);
@@ -567,7 +567,7 @@ mod tests {
     fn test_double() {
         let mut rng = thread_rng();
         for _ in 0..10 {
-            let a = Scalar::random(&mut rng);
+            let a = Fr::random(&mut rng);
             let b = a.double();
 
             assert_eq!(call_kernel("test_double_32", &[GpuScalar(a)], &[]), b);
@@ -580,8 +580,8 @@ mod tests {
     fn test_unmont() {
         let mut rng = thread_rng();
         for _ in 0..10 {
-            let a = Scalar::random(&mut rng);
-            let b: Scalar = unsafe { std::mem::transmute(a.to_repr()) };
+            let a = Fr::random(&mut rng);
+            let b: Fr = unsafe { std::mem::transmute(a.to_repr()) };
             assert_eq!(call_kernel("test_unmont_32", &[GpuScalar(a)], &[]), b);
             #[cfg(not(feature = "cuda"))]
             assert_eq!(call_kernel("test_unmont_64", &[GpuScalar(a)], &[]), b);
@@ -592,9 +592,9 @@ mod tests {
     fn test_mont() {
         let mut rng = thread_rng();
         for _ in 0..10 {
-            let a_repr = Scalar::random(&mut rng).to_repr();
-            let a: Scalar = unsafe { std::mem::transmute(a_repr) };
-            let b = Scalar::from_repr(a_repr).unwrap();
+            let a_repr = Fr::random(&mut rng).to_repr();
+            let a: Fr = unsafe { std::mem::transmute(a_repr) };
+            let b = Fr::from_repr(a_repr).unwrap();
             assert_eq!(call_kernel("test_mont_32", &[GpuScalar(a)], &[]), b);
             #[cfg(not(feature = "cuda"))]
             assert_eq!(call_kernel("test_mont_64", &[GpuScalar(a)], &[]), b);

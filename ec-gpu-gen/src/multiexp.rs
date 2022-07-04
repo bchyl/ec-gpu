@@ -47,7 +47,7 @@ where
     /// [`EcError::Aborted`].
     maybe_abort: Option<&'a (dyn Fn() -> bool + Send + Sync)>,
 
-    _phantom: std::marker::PhantomData<E::Scalar>,
+    _phantom: std::marker::PhantomData<<E as Engine>::Scalar>,
 }
 
 fn calc_num_groups(core_count: usize, num_windows: usize) -> usize {
@@ -98,7 +98,7 @@ where
 }
 
 fn exp_size<E: Engine>() -> usize {
-    std::mem::size_of::<<E::Fr as ff::PrimeField>::Repr>()
+    std::mem::size_of::<<E::Scalar as ff::PrimeField>::Repr>()
 }
 
 impl<'a, E> SingleMultiexpKernel<'a, E>
@@ -308,7 +308,7 @@ where
         results: &'s mut [<G as PrimeCurveAffine>::Curve],
         error: Arc<RwLock<EcResult<()>>>,
     ) where
-        G: PrimeCurveAffine<Scalar = E::Fr>,
+        G: PrimeCurveAffine<Scalar = <E as Engine>::Scalar>,
     {
         let num_devices = self.kernels.len();
         let num_exps = exps.len();
@@ -356,7 +356,7 @@ where
         skip: usize,
     ) -> EcResult<<G as PrimeCurveAffine>::Curve>
     where
-        G: PrimeCurveAffine<Scalar = E::Fr>,
+        G: PrimeCurveAffine<Scalar = <E as Engine>::Scalar>,
     {
         // Bases are skipped by `self.1` elements, when converted from (Arc<Vec<G>>, usize) to Source
         // https://github.com/zkcrypto/bellman/blob/10c5010fd9c2ca69442dc9775ea271e286e776d8/src/multiexp.rs#L38
@@ -396,9 +396,16 @@ mod tests {
 
     use std::time::Instant;
 
-    use blstrs::Bls12;
-    use ff::Field;
-    use group::Curve;
+    use pairing::bn256;
+    use pairing::bn256::Bn256;
+    use pairing::group::ff::{Field, PrimeField};
+    use pairing::group::Group;
+
+    use pairing::group::prime::PrimeCurveAffine;
+    use pairing::group::Curve;
+
+    // use ff::Field;
+    // use group::Curve;
 
     use crate::multiexp_cpu::{multiexp_cpu, FullDensity, QueryDensity, SourceBuilder};
 
@@ -414,7 +421,7 @@ mod tests {
         D: Send + Sync + 'static + Clone + AsRef<Q>,
         G: PrimeCurveAffine,
         E: GpuEngine,
-        E: Engine<Fr = G::Scalar>,
+        E: Engine<Scalar = G::Scalar>,
         S: SourceBuilder<G>,
     {
         let exps = density_map.as_ref().generate_exps::<E>(exponents);
@@ -428,13 +435,13 @@ mod tests {
         const START_LOG_D: usize = 10;
         let devices = Device::all();
         let mut kern =
-            MultiexpKernel::<Bls12>::create(&devices).expect("Cannot initialize kernel!");
+            MultiexpKernel::<Bn256>::create(&devices).expect("Cannot initialize kernel!");
         let pool = Worker::new();
 
         let mut rng = rand::thread_rng();
 
         let mut bases = (0..(1 << 10))
-            .map(|_| <Bls12 as Engine>::G1::random(&mut rng).to_affine())
+            .map(|_| <Bn256 as Engine>::G1::random(&mut rng).to_affine())
             .collect::<Vec<_>>();
 
         for log_d in START_LOG_D..=MAX_LOG_D {
@@ -445,7 +452,7 @@ mod tests {
 
             let v = Arc::new(
                 (0..samples)
-                    .map(|_| <Bls12 as Engine>::Fr::random(&mut rng).to_repr())
+                    .map(|_| <Bn256 as Engine>::Scalar::random(&mut rng).to_repr())
                     .collect::<Vec<_>>(),
             );
 
@@ -457,7 +464,7 @@ mod tests {
 
             now = Instant::now();
             let cpu =
-                multiexp_cpu::<_, _, _, Bls12, _>(&pool, (g.clone(), 0), FullDensity, v.clone())
+                multiexp_cpu::<_, _, _, Bn256, _>(&pool, (g.clone(), 0), FullDensity, v.clone())
                     .wait()
                     .unwrap();
             let cpu_dur = now.elapsed().as_secs() * 1000 + now.elapsed().subsec_millis() as u64;
